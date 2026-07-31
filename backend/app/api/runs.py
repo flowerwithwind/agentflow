@@ -1,12 +1,12 @@
-"""任务 API：创建 / 列表 / 详情 / 取消 / 删除 / 事件。"""
+"""任务 API：创建 / 列表 / 详情 / 取消 / 审批 / 删除 / 事件。"""
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, HTTPException
 
-from app.models import EventOut, RunCreate, RunOut, StepOut
-from app.services import planner
+from app.models import ApprovalIn, EventOut, RunCreate, RunOut, StepOut
+from app.services import executor
 from app.storage import db
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -32,10 +32,12 @@ def _step_out(row) -> StepOut:
 @router.post("", status_code=201)
 def create_run(body: RunCreate) -> RunOut:
     run_id = db.create_run(body.title, body.input_text, db.now_iso())
-    # A2：创建后立即规划并落库，状态 pending → planning → succeeded / failed
-    planner.plan_run(run_id)
-    row = db.get_run(run_id)
-    return _run_out(row)
+    if body.parallel != 4:
+        merged = {**db.get_setting("execution", {}), "parallel": body.parallel}
+        db.set_setting("execution", merged)
+    # A3：后台线程完整执行（规划 → DAG 调度），接口立即返回
+    executor.start_run(run_id)
+    return _run_out(db.get_run(run_id))
 
 
 @router.get("")
@@ -56,14 +58,30 @@ def get_run(run_id: int) -> dict[str, Any]:
 
 @router.post("/{run_id}/cancel")
 def cancel_run(run_id: int) -> RunOut:
-    row = db.get_run(run_id)
-    if not row:
+    if not db.get_run(run_id):
         raise HTTPException(status_code=404, detail="任务不存在")
-    if row["status"] in ("succeeded", "failed", "cancelled"):
-        raise HTTPException(status_code=409, detail=f"任务已处于终态 {row['status']}")
-    db.update_run(run_id, status="cancelled", finished_at=db.now_iso())
-    db.insert_event(run_id, "run_cancelled", {"run_id": run_id})
+    try:
+        executor.request_cancel(run_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return _run_out(db.get_run(run_id))
+
+
+@router.post("/steps/{step_id}/approve")
+def approve_step(step_id: int, body: ApprovalIn) -> dict[str, Any]:
+    """审批接口（A3）：步骤处于 waiting_approval 时可 approve / reject。"""
+    if db.get_step(step_id) is None:
+        raise HTTPException(status_code=404, detail="步骤不存在")
+    try:
+        executor.approve_step(step_id, body.action, body.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {
+        "step_id": step_id,
+        "action": body.action,
+        "reason": body.reason,
+        "status": "approved" if body.action == "approve" else "rejected",
+    }
 
 
 @router.delete("/{run_id}")

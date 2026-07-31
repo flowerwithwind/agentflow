@@ -1,4 +1,4 @@
-"""规划器服务（A2 / FR-02）：规则模板 + LLM 规划 + DAG 校验与落库。
+"""规划器服务（A3 / FR-02）：规则模板 + LLM 规划 + DAG 校验与落库。
 
 - 规则规划器：按关键词匹配内置模板（竞品分析/活动策划/故障排查/数据核对），兜底通用模板；
 - LLM 规划器：OpenAI 兼容接口 + JSON Schema 输出，解析失败重试 1 次后降级为规则规划器；
@@ -7,27 +7,17 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Callable
 from typing import Any
 
-import httpx
 from pydantic import BaseModel, Field, ValidationError
 
-from app.config import (
-    DEFAULT_API_KEY,
-    DEFAULT_BASE_URL,
-    DEFAULT_MAX_TOKENS,
-    DEFAULT_MODEL,
-    DEFAULT_TEMPERATURE,
-)
 from app.models import StepKind
+from app.services import llm
 from app.storage import db
 from app.utils.logging import get_logger
 
 logger = get_logger("planner")
-
-LLM_TIMEOUT_SECONDS = 60.0
 
 
 class PlanStep(BaseModel):
@@ -230,65 +220,24 @@ SYSTEM_PROMPT = """你是 AgentFlow 的任务规划器，负责把用户的一�
 
 def get_llm_config() -> dict[str, Any]:
     """读取 LLM 配置：app/config.py 默认值，settings 表可覆盖。"""
-    saved = db.get_setting("model", {}) or {}
-    return {
-        "base_url": saved.get("base_url") or DEFAULT_BASE_URL,
-        "model": saved.get("model") or DEFAULT_MODEL,
-        "api_key": saved.get("api_key") or DEFAULT_API_KEY,
-        "temperature": saved.get("temperature", DEFAULT_TEMPERATURE),
-        "max_tokens": saved.get("max_tokens", DEFAULT_MAX_TOKENS),
-    }
+    return llm.get_llm_config()
 
 
 def _call_llm(cfg: dict[str, Any], task_text: str) -> tuple[str, dict[str, Any] | None]:
-    """调用 OpenAI 兼容 chat/completions 接口，返回 (content, usage)。"""
-    url = cfg["base_url"].rstrip("/") + "/chat/completions"
-    payload = {
-        "model": cfg["model"],
-        "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    f"任务文本：{task_text}\n\n"
-                    f"请严格按以下 JSON Schema 输出规划结果：\n{json.dumps(LLM_PLAN_SCHEMA, ensure_ascii=False)}"
-                ),
-            },
-        ],
-        "temperature": cfg.get("temperature", DEFAULT_TEMPERATURE),
-        "max_tokens": cfg.get("max_tokens", DEFAULT_MAX_TOKENS),
-    }
-    resp = httpx.post(
-        url,
-        json=payload,
-        headers={"Authorization": f"Bearer {cfg['api_key']}"},
-        timeout=LLM_TIMEOUT_SECONDS,
+    """调用共享 LLM 层（app/services/llm.py），返回 (content, usage)。"""
+    user_prompt = (
+        f"任务文本：{task_text}\n\n"
+        f"请严格按以下 JSON Schema 输出规划结果：\n{json.dumps(LLM_PLAN_SCHEMA, ensure_ascii=False)}"
     )
-    resp.raise_for_status()
-    data = resp.json()
-    content = data["choices"][0]["message"]["content"]
-    return content, data.get("usage")
-
+    return llm.chat_completion(SYSTEM_PROMPT, user_prompt, cfg)
 
 def _parse_llm_steps(content: str) -> list[dict[str, Any]]:
     """解析 LLM 输出：剥离代码块 → JSON 解析 → 字段/DAG 校验。"""
-    text = content.strip()
-    text = re.sub(r"^```(?:json)?\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-    try:
-        data = json.loads(text)
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM 输出不是合法 JSON: {exc}") from exc
-    if isinstance(data, dict):
-        steps = data.get("steps")
-    elif isinstance(data, list):
-        steps = data
-    else:
-        steps = None
+    data = llm.parse_json_object(content)
+    steps = data.get("steps")
     if not isinstance(steps, list):
         raise TypeError("LLM 输出缺少 steps 数组")
     return validate_plan(steps)
-
 
 def plan_with_llm(task_text: str, cfg: dict[str, Any] | None = None) -> dict[str, Any] | None:
     """LLM 规划：解析失败重试 1 次，仍失败返回 None（由调用方降级为规则规划器）。"""
@@ -355,7 +304,7 @@ def save_plan(run_id: int, plan: dict[str, Any]) -> None:
 
 
 def plan_run(run_id: int) -> dict[str, Any] | None:
-    """为任务执行规划并落库：状态 pending → planning → succeeded / failed。"""
+    """为任务执行规划并落库：状态 pending → planning → pending（交由执行引擎调度）/ failed。"""
     run = db.get_run(run_id)
     if not run:
         raise ValueError(f"任务不存在: {run_id}")
@@ -366,7 +315,9 @@ def plan_run(run_id: int) -> dict[str, Any] | None:
     try:
         plan = generate_plan(run["input_text"])
         save_plan(run_id, plan)
-        db.update_run(run_id, status="succeeded")
+        if db.get_run(run_id)["status"] == "cancelled":
+            return None
+        db.update_run(run_id, status="pending")
         db.insert_event(
             run_id,
             "run_planned",

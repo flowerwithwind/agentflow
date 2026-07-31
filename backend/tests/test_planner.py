@@ -1,11 +1,24 @@
-"""规划器测试（A2 / FR-02）：规则模板 DAG、LLM 降级、环检测、规划落库。"""
+"""规划器测试（A3 / FR-02）：规则模板 DAG、LLM 降级、环检测、规划落库。"""
 from __future__ import annotations
 
 import json
+import time
 
 import pytest
 from app.services import planner
 from app.storage import db
+
+TERMINAL = ("succeeded", "failed", "cancelled")
+
+
+def _wait_until(pred, timeout=10.0, interval=0.02):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if pred():
+            return True
+        time.sleep(interval)
+    return False
+
 
 RULE_TASKS = [
     ("竞品分析", "请分析三家竞品的最新动态、功能差异并给出建议。"),
@@ -182,7 +195,7 @@ def test_plan_run_persists_complete_fields(client):
     assert plan is not None
     assert plan["source"] == "rule"
     run = db.get_run(run_id)
-    assert run["status"] == "succeeded"
+    assert run["status"] == "pending"
     saved = db.jloads(run["plan_json"])
     assert saved["version"] == 1
     assert saved["source"] == "rule"
@@ -217,7 +230,7 @@ def test_plan_run_with_llm_persists_tokens(client, monkeypatch):
     assert plan is not None
     assert plan["source"] == "llm"
     run = db.get_run(run_id)
-    assert run["status"] == "succeeded"
+    assert run["status"] == "pending"
     assert run["total_tokens"] == 150
     assert db.jloads(run["plan_json"])["source"] == "llm"
     assert [s["step_key"] for s in db.list_steps(run_id)] == ["research", "report"]
@@ -245,10 +258,15 @@ def test_plan_run_rejects_non_pending(client):
         planner.plan_run(run_id)
 
 
-def test_create_run_api_triggers_planning(client):
-    r = client.post("/api/runs", json={"title": "竞品分析", "input_text": "请分析三家竞品的最新动态并给出建议。"})
+def test_create_run_api_starts_async_execution(client):
+    r = client.post("/api/runs", json={"title": "竞争分析", "input_text": "请分析三家竞争产品的最新动态并给出建议。"})
     assert r.status_code == 201
-    run = r.json()
-    assert run["status"] == "succeeded"
-    detail = client.get(f"/api/runs/{run['id']}").json()
+    run_id = r.json()["id"]
+    assert _wait_until(lambda: db.get_run(run_id)["status"] in TERMINAL, 15), "run 未到达终态"
+    run = db.get_run(run_id)
+    assert run["status"] == "succeeded"  # 无 API Key：规则规划 + 演示执行
+    detail = client.get(f"/api/runs/{run_id}").json()
     assert len(detail["steps"]) >= 4
+    types = [e["type"] for e in db.list_events(run_id)]
+    assert types[:3] == ["run_planning", "run_planned", "run_started"]
+    assert types[-1] == "run_succeeded"
