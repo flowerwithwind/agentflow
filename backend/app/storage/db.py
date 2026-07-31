@@ -156,6 +156,17 @@ def wipe_data() -> None:
         for t in tables:
             conn.execute(f"DELETE FROM {t}")
 
+def clear_runs() -> int:
+    """清空全部任务业务数据（runs/steps/events/approvals），保留工具与设置。返回删除的任务数。"""
+    with get_conn() as conn:
+        total = conn.execute("SELECT COUNT(*) FROM runs").fetchone()[0]
+        conn.execute("DELETE FROM approvals")
+        conn.execute("DELETE FROM events")
+        conn.execute("DELETE FROM steps")
+        conn.execute("DELETE FROM runs")
+        return int(total)
+
+
 
 # ---------------------------------------------------------------- runs
 

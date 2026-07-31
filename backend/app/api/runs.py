@@ -115,7 +115,11 @@ _TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
 
 
 def _sse_event(ev) -> str:
-    """单条 SSE 消息：id=seq、event=type、data=JSON（单行，兼容任何 SSE 客户端）。"""
+    """单条 SSE 消息：id=seq、data=JSON（单行，兼容任何 SSE 客户端）。
+
+注意：不发送 event: 行，默认 message 类型，浏览器 EventSource.onmessage 即可收到；
+保留 id=seq 以支持浏览器 Last-Event-ID 断线续传。
+"""
     data = json.dumps(
         {
             "id": ev["id"],
@@ -127,7 +131,7 @@ def _sse_event(ev) -> str:
         },
         ensure_ascii=False,
     )
-    return f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {data}\n\n"
+    return f"id: {ev['seq']}\ndata: {data}\n\n"
 
 
 def _event_stream(run_id: int, after: int):

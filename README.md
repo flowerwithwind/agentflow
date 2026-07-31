@@ -21,3 +21,38 @@ Python · FastAPI · SQLite · Vue 3 · Vite · Element Plus · ECharts · Docke
 ## 里程碑
 
 见 [docs/需求开发文档.md](docs/需求开发文档.md) §9：M1 骨架 → M2 编排引擎 → M3 审批与可观测 → M4 前端 → M5 演示与部署 → M6 质量门禁。
+## 快速启动
+
+### 本地开发
+
+```powershell
+# 后端（conda 环境 agentflow，Python 3.12）
+cd backend
+python -m uvicorn app.main:app --port 8020
+
+# 前端（另开终端，dev 端口 5176，/api 自动代理到 8020）
+cd frontend
+npm install
+npm run dev
+```
+
+### Docker Compose（前后端一体，含 Nginx SPA 回退与 SSE 反代）
+
+```powershell
+docker compose up -d --build
+# 前端 http://localhost:5176   后端 API http://localhost:8020
+```
+
+- 数据持久化：`./data` 挂载为容器 `/data`（任务库 `agentflow.db` + 演示样例库 `demo.db`）
+- 端口规划：前端 5176 → Nginx 80；后端 8020；SSE 流已关闭 Nginx 缓冲
+- 本机代理受限时构建：compose 已内置 `host.docker.internal:7897` 构建代理参数（npm ci 用），无需额外配置
+
+## 验证
+
+```powershell
+# 后端：pytest 全绿 + ruff clean
+cd backend && pytest && ruff check .
+# 前端：vitest + 生产构建
+cd frontend && npm test && npm run build
+```
+

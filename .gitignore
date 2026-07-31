@@ -8,6 +8,7 @@ __pycache__/
 # 数据与日志
 data/
 logs/
+*.log
 
 # Node
 node_modules/

@@ -1,0 +1,28 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: agentflow-backend
+    ports:
+      - "8020:8020"
+    environment:
+      - AGENTFLOW_DATA_DIR=/data
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        HTTP_PROXY: http://host.docker.internal:7897
+        HTTPS_PROXY: http://host.docker.internal:7897
+        NO_PROXY: localhost,127.0.0.1
+    container_name: agentflow-frontend
+    ports:
+      - "5176:80"
+    depends_on:
+      - backend
+    restart: unless-stopped

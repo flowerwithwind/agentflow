@@ -184,6 +184,8 @@ def _parse_sse(body: str) -> list[dict]:
                 data = line[6:]
         if data is not None:
             ev["payload"] = json.loads(data)
+            if "type" not in ev:
+                ev["type"] = ev["payload"].get("type", "")
         events.append(ev)
     return events
 
