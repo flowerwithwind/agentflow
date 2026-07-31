@@ -322,6 +322,9 @@ def _tool_args_from_prompt(step) -> dict[str, Any]:
         return {"text": text}
     if tool == "http_request":
         return {"url": "https://example.com/api/demo"}
+    if tool == "code_review":
+        # A7：内置样例 diff 一键跑通
+        return {"diff": "sample", "language": "python", "focus": ["正确性", "安全", "性能", "可维护性", "风格"]}
     # A4：自定义工具按参数定义生成演示参数（必填 string → prompt 文本，其余按类型给默认值）
     row = db.get_tool_by_key(tool)
     params = db.jloads(row["params_json"], {}) if row else {}

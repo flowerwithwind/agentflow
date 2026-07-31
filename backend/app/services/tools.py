@@ -25,6 +25,36 @@ DEMO_WEB_RESULTS = [
     {"title": "行业公开资料", "url": "https://example.com/industry-report", "snippet": "市场调研显示，影像修复与超分辨率在电商与档案数字化场景需求增长。"},
 ]
 
+DEMO_DIFF = """--- a/backend/user_service.py
++++ b/backend/user_service.py
+@@ -1,20 +1,24 @@
+ import sqlite3
++import os
+ 
+ def get_user(user_id):
+-    conn = sqlite3.connect("users.db")
+-    cur = conn.execute("SELECT * FROM users WHERE id=" + str(user_id))
++    conn = sqlite3.connect("users.db")
++    sql = "SELECT * FROM users WHERE id=" + str(user_id)
++    cur = conn.execute(sql)
+     row = cur.fetchone()
++    cur.close()
+     conn.close()
+     return row
++
++def admin_check(env):
++    if env == "prod":
++        return True
++    return False
++
++def delete_all():
++    os.system("rm -rf /tmp/cache")
++    data = []
++    for i in range(len(data)):
++        print(data[i])
++    return data
++"""
+
 _SQL_FORBIDDEN_KEYWORDS = (
     "insert", "update", "delete", "drop", "alter", "create", "replace",
     "attach", "detach", "pragma", "vacuum", "begin", "commit", "rollback",
@@ -160,6 +190,112 @@ def _demo_http_request(args: dict[str, Any]) -> dict[str, Any]:
         }
 
 
+# ---------------------------------------------------------------- code_review（A7）
+
+_REVIEW_CATEGORIES = ("正确性", "安全", "性能", "可维护性", "风格")
+
+# (pattern, category, severity, message, suggestion)
+_REVIEW_RULES: list[tuple[str, str, str, str, str]] = [
+    ("eval(", "安全", "critical", "使用 eval() 执行动态代码，存在任意代码执行风险", "改用 ast.literal_eval 或明确的数据解析方案"),
+    ("exec(", "安全", "critical", "使用 exec() 执行动态代码，存在任意代码执行风险", "移除动态执行，改为受控的白名单逻辑"),
+    ("pickle.loads", "安全", "critical", "反序列化不可信数据可能导致任意代码执行", "改用 JSON 或校验来源后再反序列化"),
+    ("os.system(", "安全", "critical", "os.system 直接执行 shell 命令，存在注入风险", "改用 subprocess.run(..., shell=False) 传参数列表"),
+    ("shell=True", "安全", "warning", "subprocess 使用 shell=True，命令注入面扩大", "使用 shell=False 并传入参数列表"),
+    ("+ str(", "安全", "warning", "SQL 或命令由字符串拼接构造，存在注入风险", "使用参数化查询（? 占位符）或参数列表"),
+    ('"SELECT', "安全", "warning", "SQL 语句字符串拼接，存在注入风险", "使用参数化查询（? 占位符）"),
+    ("'SELECT", "安全", "warning", "SQL 语句字符串拼接，存在注入风险", "使用参数化查询（? 占位符）"),
+    ("except:", "正确性", "warning", "裸 except 吞掉所有异常，掩盖真实错误", "捕获具体异常类型并记录日志"),
+    ("== None", "正确性", "suggestion", "使用 == None 判断空值", "改用 is None"),
+    ("!= None", "正确性", "suggestion", "使用 != None 判断空值", "改用 is not None"),
+    ("range(len(", "性能", "warning", "通过下标遍历集合，性能与可读性均差", "直接遍历元素或使用 enumerate"),
+    ("for i in range", "性能", "suggestion", "for 循环中使用 range 下标访问", "直接迭代容器元素"),
+    ("cur.close()", "可维护性", "warning", "手动关闭连接/游标，异常路径会泄漏资源", "使用 with 语句或 contextlib.closing"),
+    ("conn.close()", "可维护性", "warning", "手动管理连接生命周期，异常路径会泄漏资源", "使用 with 语句自动管理连接"),
+]
+
+
+def _rule_review(diff: str, language: str, focus: list[str]) -> list[dict[str, Any]]:
+    """规则审查：按行扫描常见问题模式，输出结构化 issues。"""
+    focus_set = set(focus)
+    issues: list[dict[str, Any]] = []
+    lines = diff.splitlines()
+    for lineno, line in enumerate(lines, start=1):
+        if not line.startswith(("+", " ")):  # 只审查新增/上下文行，跳过 - 删除行
+            continue
+        for pattern, category, severity, message, suggestion in _REVIEW_RULES:
+            if focus_set and category not in focus_set:
+                continue
+            if pattern in line:
+                issues.append({
+                    "category": category,
+                    "severity": severity,
+                    "line": lineno,
+                    "code": line.strip()[:80],
+                    "message": message,
+                    "suggestion": suggestion,
+                })
+    return issues
+
+
+def _dedupe_issues(issues: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    seen: set[tuple[str, str, int]] = set()
+    result = []
+    for it in issues:
+        key = (it["category"], it["message"], it["line"])
+        if key in seen:
+            continue
+        seen.add(key)
+        result.append(it)
+    return result
+
+
+def _review_score(issues: list[dict[str, Any]]) -> int:
+    weight = {"critical": 15, "warning": 6, "suggestion": 2}
+    deducted = sum(weight.get(i["severity"], 2) for i in issues)
+    return max(0, min(100, 100 - deducted))
+
+
+def _demo_code_review(args: dict[str, Any]) -> dict[str, Any]:
+    """多维代码审查（A7）：PR URL 或 diff 文本 → 规则审查输出结构化评审。"""
+    diff = str(args.get("diff") or "").strip()
+    language = str(args.get("language") or "").strip() or "未知"
+    focus = [str(x) for x in (args.get("focus") or [])]
+    mode = "diff"
+    sample = False
+    if diff.lower().startswith(("http://", "https://")):
+        mode = "pr_url"
+        sample = True
+        note = "演示模式不拉取远端 PR，改用内置样例 diff 进行规则审查"
+        diff = DEMO_DIFF
+    elif diff.lower() == "sample":
+        sample = True
+        note = "使用内置样例 diff（sample）"
+        diff = DEMO_DIFF
+    else:
+        note = ""
+    issues = _dedupe_issues(_rule_review(diff, language, focus))
+    by_category = {c: sum(1 for i in issues if i["category"] == c) for c in _REVIEW_CATEGORIES}
+    score = _review_score(issues)
+    summary = (
+        f"共发现 {len(issues)} 个问题（安全 {by_category['安全']}、正确性 {by_category['正确性']}、"
+        f"性能 {by_category['性能']}、可维护性 {by_category['可维护性']}、风格 {by_category['风格']}），"
+        f"评分 {score}/100。"
+    )
+    result: dict[str, Any] = {
+        "mode": mode,
+        "sample": sample,
+        "language": language,
+        "focus": focus,
+        "score": score,
+        "summary": summary,
+        "issues": issues,
+        "by_category": by_category,
+    }
+    if note:
+        result["note"] = note
+    return result
+
+
 def execute_tool(tool_key: str, args: dict[str, Any]) -> dict[str, Any]:
     """执行工具：参数校验 + 内置实现 / 自定义工具演示回显。"""
     row = db.get_tool_by_key(tool_key)
@@ -175,6 +311,8 @@ def execute_tool(tool_key: str, args: dict[str, Any]) -> dict[str, Any]:
         return _demo_summarize(args)
     if tool_key == "http_request":
         return _demo_http_request(args)
+    if tool_key == "code_review":
+        return _demo_code_review(args)
     # 自定义工具：仅存参数定义，演示模式返回参数回显（接入真实实现后替换此输出）
     return {
         "demo": True,

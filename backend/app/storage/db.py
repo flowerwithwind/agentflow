@@ -287,6 +287,12 @@ BUILTIN_TOOLS = [
      "params": {"url": {"type": "string", "required": True}}, "sensitive": True},
     {"key": "summarize", "name": "文本摘要", "description": "对输入文本生成要点摘要",
      "params": {"text": {"type": "string", "required": True}}, "sensitive": False},
+    {"key": "code_review", "name": "代码审查", "description": "多维代码审查（正确性/安全/性能/可维护性/风格），输入 PR URL 或 diff 文本",
+     "params": {
+         "diff": {"type": "string", "required": True, "description": "PR URL 或 diff 文本（传 sample 使用内置样例）"},
+         "language": {"type": "string", "required": False, "description": "代码语言"},
+         "focus": {"type": "array", "required": False, "description": "审查重点，如 [正确性, 安全]"},
+     }, "sensitive": False},
     {"key": "approve", "name": "人工审批", "description": "暂停执行等待人工确认",
      "params": {"reason": {"type": "string", "required": True}}, "sensitive": True},
 ]
