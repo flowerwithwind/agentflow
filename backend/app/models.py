@@ -90,6 +90,7 @@ class StepOut(BaseModel):
     role: str
     kind: str
     tool_key: str | None = None
+    prompt: str | None = None
     depends_on: list[str] = []
     status: str
     output: dict[str, Any] | None = None

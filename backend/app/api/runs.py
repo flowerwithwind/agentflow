@@ -6,6 +6,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 
 from app.models import EventOut, RunCreate, RunOut, StepOut
+from app.services import planner
 from app.storage import db
 
 router = APIRouter(prefix="/api/runs", tags=["runs"])
@@ -19,6 +20,7 @@ def _step_out(row) -> StepOut:
     return StepOut(
         id=row["id"], run_id=row["run_id"], step_key=row["step_key"], seq=row["seq"],
         name=row["name"], role=row["role"], kind=row["kind"], tool_key=row["tool_key"],
+        prompt=row["prompt"],
         depends_on=db.jloads(row["depends_on"], []), status=row["status"],
         output=db.jloads(row["output_json"], None),
         tokens_in=row["tokens_in"], tokens_out=row["tokens_out"], duration_ms=row["duration_ms"],
@@ -30,6 +32,8 @@ def _step_out(row) -> StepOut:
 @router.post("", status_code=201)
 def create_run(body: RunCreate) -> RunOut:
     run_id = db.create_run(body.title, body.input_text, db.now_iso())
+    # A2：创建后立即规划并落库，状态 pending → planning → succeeded / failed
+    planner.plan_run(run_id)
     row = db.get_run(run_id)
     return _run_out(row)
 
