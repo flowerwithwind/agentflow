@@ -3,6 +3,8 @@
 把"一句话任务"变成"一组可追踪、可审批、可复盘的多智能体协作流水线"。
 > 求职作品集主项目（AI 应用开发工程师）· 需求文档见 [docs/需求开发文档.md](docs/需求开发文档.md)
 
+![CI](https://github.com/flowerwithwind/agentflow/actions/workflows/ci.yml/badge.svg)
+
 ## 核心能力
 
 - **自然语言规划**：任务输入 → 规划器拆解为子任务 DAG（步骤、角色、依赖、工具）
