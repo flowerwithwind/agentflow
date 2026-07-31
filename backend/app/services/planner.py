@@ -163,6 +163,9 @@ def validate_plan(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     keys = [s["key"] for s in normalized]
     if len(set(keys)) != len(keys):
         raise ValueError("步骤 key 重复，无法构成 DAG")
+    # A4：敏感工具步骤强制插入前置审批步骤（已有审批依赖则不重复插入）
+    _enforce_sensitive_approvals(normalized)
+    keys = [s["key"] for s in normalized]
     key_set = set(keys)
     for step in normalized:
         for dep in step["depends_on"]:
@@ -172,6 +175,57 @@ def validate_plan(steps: list[dict[str, Any]]) -> list[dict[str, Any]]:
     if cycle:
         raise ValueError("步骤依赖构成环: " + " -> ".join(cycle))
     return normalized
+
+
+def _enforce_sensitive_approvals(steps: list[dict[str, Any]]) -> None:
+    """A4：敏感工具强制前置审批（就地修改 steps 列表）。
+
+    对 kind=tool 且工具标记 sensitive 的步骤：若其依赖闭包中不存在 kind=approval
+    的步骤，则插入审批步骤（审批继承工具步骤原依赖，工具步骤改为仅依赖审批），
+    保证敏感工具在人工审批通过前不会执行。
+    """
+    key_to_step = {s["key"]: s for s in steps}
+
+    def _has_approval_dep(step: dict[str, Any], seen: set[str]) -> bool:
+        for dep in step["depends_on"]:
+            if dep in seen:
+                continue
+            seen.add(dep)
+            dep_step = key_to_step.get(dep)
+            if dep_step is None:
+                continue
+            if dep_step["kind"] == "approval" or _has_approval_dep(dep_step, seen):
+                return True
+        return False
+
+    insertions: list[tuple[int, dict[str, Any]]] = []
+    for idx, step in enumerate(steps):
+        if step["kind"] != "tool" or not step.get("tool"):
+            continue
+        row = db.get_tool_by_key(step["tool"])
+        if row is None or not bool(row["sensitive"]):
+            continue
+        if _has_approval_dep(step, set()):
+            continue
+        appr_key = f"approve_{step['key']}"
+        n = 1
+        while appr_key in key_to_step:
+            n += 1
+            appr_key = f"approve_{step['key']}_{n}"
+        approval = _step(
+            appr_key,
+            f"审批：{step['name']}",
+            "审批人",
+            "approval",
+            f"敏感工具 {step['tool']} 执行前需人工审批：{step['prompt'][:120]}",
+            depends_on=list(step["depends_on"]),
+        )
+        step["depends_on"] = [appr_key]
+        key_to_step[appr_key] = approval
+        insertions.append((idx, approval))
+    # 审批步骤插到对应工具步骤之前（倒序插入避免索引漂移）
+    for idx, approval in sorted(insertions, key=lambda item: item[0], reverse=True):
+        steps.insert(idx, approval)
 
 
 # ---------------------------------------------------------------- 规则规划器

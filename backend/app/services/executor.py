@@ -80,9 +80,27 @@ def _run_flow(run_id: int) -> None:
 # ---------------------------------------------------------------- 调度
 
 
+def _is_approval_step(run_id: int, step_key: str) -> bool:
+    row = db.get_step_by_key(run_id, step_key)
+    return row is not None and row["kind"] == "approval"
+
+
 def _deps_met(step, status: dict[str, str]) -> bool:
     deps = db.jloads(step["depends_on"], [])
-    return all(status.get(d) in ("succeeded", "skipped") for d in deps)
+    if not all(status.get(d) in ("succeeded", "skipped") for d in deps):
+        return False
+    # A4：敏感工具步骤必须依赖一个已通过的审批步骤，否则不允许调度
+    if step["kind"] == "tool" and step["tool_key"]:
+        row = db.get_tool_by_key(step["tool_key"])
+        if (
+            row is not None
+            and bool(row["sensitive"])
+            and not any(
+                status.get(d) == "succeeded" and _is_approval_step(step["run_id"], d) for d in deps
+            )
+        ):
+            return False
+    return True
 
 
 def _blocked_by_failure(step, status: dict[str, str]) -> bool:
@@ -293,7 +311,7 @@ def _mock_llm(step) -> dict[str, Any]:
 
 
 def _tool_args_from_prompt(step) -> dict[str, Any]:
-    """演示模式：从 prompt 规则提取工具参数（A4 升级为 LLM 参数生成）。"""
+    """演示模式：从 prompt 规则提取工具参数（A4 支持自定义工具按参数定义生成）。"""
     tool = step["tool_key"]
     text = (step["prompt"] or "")[:200]
     if tool == "web_search":
@@ -304,7 +322,25 @@ def _tool_args_from_prompt(step) -> dict[str, Any]:
         return {"text": text}
     if tool == "http_request":
         return {"url": "https://example.com/api/demo"}
-    return {}
+    # A4：自定义工具按参数定义生成演示参数（必填 string → prompt 文本，其余按类型给默认值）
+    row = db.get_tool_by_key(tool)
+    params = db.jloads(row["params_json"], {}) if row else {}
+    args: dict[str, Any] = {}
+    for name, spec in params.items():
+        if not spec.get("required"):
+            continue
+        param_type = spec.get("type")
+        if param_type == "integer":
+            args[name] = 1
+        elif param_type == "number":
+            args[name] = 1.0
+        elif param_type == "boolean":
+            args[name] = True
+        elif param_type == "array":
+            args[name] = []
+        else:
+            args[name] = text
+    return args
 
 
 def _execute_tool_step(step) -> dict[str, Any]:

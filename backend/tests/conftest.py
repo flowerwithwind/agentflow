@@ -14,7 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.main import app
 from app.seed import ensure_seed_tools
-from app.storage import db
+from app.storage import db, demo_db
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +23,7 @@ def db_env():
     db.init_db()
     db.wipe_data()
     ensure_seed_tools()
+    demo_db.ensure_demo_db()
     yield
 
 

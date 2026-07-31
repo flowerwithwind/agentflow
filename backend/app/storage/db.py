@@ -308,6 +308,19 @@ def create_tool(key: str, name: str, description: str, params: dict[str, Any], s
         return int(cur.lastrowid)
 
 
+def update_tool(key: str, name: str, description: str, params: dict[str, Any], sensitive: bool) -> None:
+    with get_conn() as conn:
+        conn.execute(
+            "UPDATE tools SET name=?, description=?, params_json=?, sensitive=? WHERE key=?",
+            (name, description, jdumps(params), 1 if sensitive else 0, key),
+        )
+
+
+def delete_tool(key: str) -> None:
+    with get_conn() as conn:
+        conn.execute("DELETE FROM tools WHERE key=?", (key,))
+
+
 # ---------------------------------------------------------------- approvals
 
 def create_approval(run_id: int, step_id: int, action: str, reason: str) -> int:

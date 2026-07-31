@@ -30,6 +30,14 @@ RATE_LIMIT_PER_MINUTE = int(os.environ.get("AGENTFLOW_RATE_LIMIT", "60"))
 # 任务文本限制
 TASK_TEXT_MAX = 4000
 TASK_TITLE_MAX = 64
+# 演示数据库与 HTTP 白名单（A4）
+DEMO_DB_PATH = DATA_DIR / "demo.db"
+# http_request 允许的域名（含子域名）；演示环境不请求任意外部 URL
+HTTP_ALLOWED_HOSTS = tuple(
+    h.strip()
+    for h in os.environ.get("AGENTFLOW_HTTP_ALLOWED_HOSTS", "example.com,jsonplaceholder.typicode.com,httpbin.org").split(",")
+    if h.strip()
+)
 
 
 def ensure_dirs() -> None:

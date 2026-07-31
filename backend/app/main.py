@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.api import health, runs, settings, tools
 from app.config import ensure_dirs
 from app.seed import ensure_seed_tools
-from app.storage import db
+from app.storage import db, demo_db
 from app.utils.limits import RateLimitMiddleware
 from app.utils.logging import get_logger
 
@@ -21,6 +21,7 @@ async def lifespan(app: FastAPI):
     ensure_dirs()
     db.init_db()
     ensure_seed_tools()
+    demo_db.ensure_demo_db()
     db.fail_stale_runs()
     logger.info("AgentFlow 启动完成")
     yield
