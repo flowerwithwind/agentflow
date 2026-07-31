@@ -47,6 +47,30 @@ docker compose up -d --build
 - 端口规划：前端 5176 → Nginx 80；后端 8020；SSE 流已关闭 Nginx 缓冲
 - 本机代理受限时构建：compose 已内置 `host.docker.internal:7897` 构建代理参数（npm ci 用），无需额外配置
 
+## 架构
+
+```mermaid
+flowchart LR
+  U[浏览器 / Vue 3 前端] -->|HTTP + SSE| N[Nginx]
+  N -->|/api 反代| B[FastAPI 后端]
+  B --> P[规划器<br/>LLM / 规则降级]
+  B --> X[执行引擎<br/>DAG 并行 / 重试 / 超时]
+  B --> T[工具注册表<br/>检索 / SQL / HTTP / 摘要]
+  B --> S[(SQLite<br/>任务库 + 样例库)]
+  X -->|审批挂起/唤醒| U
+  X --> T
+```
+
+- 前端静态资源由 Nginx 提供（SPA 回退），`/api` 反向代理到后端，SSE 流关闭缓冲实现实时推送
+- 数据落盘 `./data`（`agentflow.db` 任务库 + `demo.db` 内置样例库），重启不丢
+- 无 LLM Key 时自动降级为规则规划器 + 模拟执行器，接口与真实模式一致
+
+## 演示截图
+
+![任务工作台](docs/screenshots/dashboard.png)
+
+![任务详情（DAG + SSE 事件流 + 审批）](docs/screenshots/run-detail.png)
+
 ## 验证
 
 ```powershell
