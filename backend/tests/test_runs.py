@@ -1,6 +1,7 @@
 """任务 CRUD 与事件测试（A3：创建即异步执行，状态 pending → planning → running → succeeded/failed/cancelled）。"""
 from __future__ import annotations
 
+import json
 import time
 
 from app.services import executor, planner
@@ -161,3 +162,104 @@ def test_approve_step_api(client):
     assert client.post(
         "/api/runs/steps/9999/approve", json={"action": "approve", "reason": "x"}
     ).status_code == 404
+
+
+# ---------------------------------------------------------------- A5：SSE 事件流
+
+def _parse_sse(body: str) -> list[dict]:
+    """解析 SSE 文本：返回 [{seq, type, payload}] 列表。"""
+    events = []
+    for block in body.split("\n\n"):
+        block = block.strip()
+        if not block:
+            continue
+        ev: dict = {}
+        data = None
+        for line in block.split("\n"):
+            if line.startswith("id: "):
+                ev["seq"] = int(line[4:])
+            elif line.startswith("event: "):
+                ev["type"] = line[7:]
+            elif line.startswith("data: "):
+                data = line[6:]
+        if data is not None:
+            ev["payload"] = json.loads(data)
+        events.append(ev)
+    return events
+
+
+def test_events_stream_sse_contiguous(client):
+    run = client.post("/api/runs", json=_payload()).json()
+    _wait_run(run["id"])
+    resp = client.get(f"/api/runs/{run['id']}/events/stream")
+    assert resp.status_code == 200
+    assert "text/event-stream" in resp.headers["content-type"]
+    events = _parse_sse(resp.text)
+    assert events
+    seqs = [e["seq"] for e in events]
+    assert seqs == list(range(1, len(seqs) + 1))  # 不重不漏、连续递增
+    types = [e["type"] for e in events]
+    assert types[0] == "run_planning"
+    assert types[-1] == "run_succeeded"
+    # 与增量接口完全一致
+    poll = client.get(f"/api/runs/{run['id']}/events").json()
+    assert [e["type"] for e in poll] == types
+
+
+def test_events_stream_after_seq_incremental(client):
+    run = client.post("/api/runs", json=_payload()).json()
+    _wait_run(run["id"])
+    total = len(client.get(f"/api/runs/{run['id']}/events").json())
+    assert total >= 4
+    resp = client.get(f"/api/runs/{run['id']}/events/stream", params={"after": total - 2})
+    events = _parse_sse(resp.text)
+    assert [e["seq"] for e in events] == [total - 1, total]
+    # 断线续传：Last-Event-ID 与 after 同语义
+    resp2 = client.get(f"/api/runs/{run['id']}/events/stream", headers={"Last-Event-ID": str(total - 1)})
+    events2 = _parse_sse(resp2.text)
+    assert [e["seq"] for e in events2] == [total]
+
+
+def test_events_stream_404(client):
+    assert client.get("/api/runs/9999/events/stream").status_code == 404
+
+
+# ---------------------------------------------------------------- A5：拒绝级联跳过
+
+def test_approve_reject_skips_downstream(client):
+    rid = db.create_run("活动策划", "策划一场产品发布会活动，包含流程与预算。", db.now_iso())
+    executor.start_run(rid)
+    assert _wait_until(lambda: db.get_run(rid)["status"] == "waiting_approval", 10), "未到达审批挂起"
+    approval = next(s for s in db.list_steps(rid) if s["kind"] == "approval")
+    r = client.post(
+        f"/api/runs/steps/{approval['id']}/approve",
+        json={"action": "reject", "reason": "预算超标"},
+    )
+    assert r.status_code == 200
+    assert r.json()["status"] == "rejected"
+    run = _wait_run(rid)
+    assert run["status"] == "succeeded"
+    final = {s["step_key"]: s["status"] for s in db.list_steps(rid)}
+    assert final["approve"] == "skipped"
+    assert final["report"] == "skipped"  # 下游级联跳过
+    assert "已跳过" in run["report"]
+
+
+# ---------------------------------------------------------------- A5：指标落库
+
+def test_run_metrics_stored(client):
+    rid = db.create_run("指标", "请分析三家竞品的最新动态。", db.now_iso())
+    executor.start_run(rid)
+    run = _wait_run(rid)
+    assert run["status"] == "succeeded"
+    steps = db.list_steps(rid)
+    assert len(steps) >= 4
+    for s in steps:
+        assert s["attempts"] >= 1
+        assert s["duration_ms"] is not None and s["duration_ms"] >= 0
+        # 无 Key 演示执行：tokens 均为 0，字段必须落库
+        assert s["tokens_in"] == 0
+        assert s["tokens_out"] == 0
+    assert run["total_tokens"] == 0
+    assert run["total_duration_ms"] is not None and run["total_duration_ms"] >= 0
+    assert run["report"] and "任务报告" in run["report"]

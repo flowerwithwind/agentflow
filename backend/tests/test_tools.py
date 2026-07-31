@@ -6,7 +6,6 @@ import threading
 import time
 
 import pytest
-
 from app.services import executor, planner, tools
 from app.storage import db
 

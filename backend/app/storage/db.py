@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from collections.abc import Iterable
 from contextlib import contextmanager
 from typing import Any
@@ -130,10 +131,22 @@ def get_conn() -> Iterable[sqlite3.Connection]:
         conn.close()
 
 
+# 事件 seq 分配锁：并行步骤多线程写事件，MAX(seq)+1 必须原子（WAL 独立连接存在竞态）
+_EVENT_SEQ_LOCK = threading.Lock()
+
+
 def init_db() -> None:
     DB_PATH.parent.mkdir(parents=True, exist_ok=True)
     with get_conn() as conn:
         conn.executescript(SCHEMA_SQL)
+    # 事件 (run_id, seq) 唯一索引兜底：历史脏数据存在重复 seq 时跳过（仅告警不阻断启动）
+    try:
+        with get_conn() as conn:
+            conn.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS idx_events_run_seq ON events(run_id, seq)"
+            )
+    except sqlite3.OperationalError:
+        pass
 
 
 def wipe_data() -> None:
@@ -245,7 +258,8 @@ def update_step(step_id: int, **fields: Any) -> None:
 # ---------------------------------------------------------------- events
 
 def insert_event(run_id: int, type: str, payload: dict[str, Any] | None = None, step_id: int | None = None) -> int:
-    with get_conn() as conn:
+    # 并行步骤线程会并发写事件：seq 计算与插入必须原子，否则 MAX+1 会撞号
+    with _EVENT_SEQ_LOCK, get_conn() as conn:
         seq = conn.execute("SELECT COALESCE(MAX(seq),0)+1 FROM events WHERE run_id=?", (run_id,)).fetchone()[0]
         cur = conn.execute(
             "INSERT INTO events(run_id, step_id, seq, type, payload_json, created_at) VALUES(?,?,?,?,?,?)",

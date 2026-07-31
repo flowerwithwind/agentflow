@@ -1,9 +1,12 @@
-"""任务 API：创建 / 列表 / 详情 / 取消 / 审批 / 删除 / 事件。"""
+"""任务 API：创建 / 列表 / 详情 / 取消 / 审批 / 删除 / 事件 / SSE 事件流。"""
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+from fastapi.responses import StreamingResponse
 
 from app.models import ApprovalIn, EventOut, RunCreate, RunOut, StepOut
 from app.services import executor
@@ -104,3 +107,56 @@ def list_events(run_id: int, after: int = 0, limit: int = 500) -> list[EventOut]
         )
         for r in db.list_events(run_id, after=after, limit=min(limit, 2000))
     ]
+
+
+# ---------------------------------------------------------------- SSE 事件流（A5）
+
+_TERMINAL_STATUSES = ("succeeded", "failed", "cancelled")
+
+
+def _sse_event(ev) -> str:
+    """单条 SSE 消息：id=seq、event=type、data=JSON（单行，兼容任何 SSE 客户端）。"""
+    data = json.dumps(
+        {
+            "id": ev["id"],
+            "seq": ev["seq"],
+            "step_id": ev["step_id"],
+            "type": ev["type"],
+            "payload": db.jloads(ev["payload_json"], None),
+            "created_at": ev["created_at"],
+        },
+        ensure_ascii=False,
+    )
+    return f"id: {ev['seq']}\nevent: {ev['type']}\ndata: {data}\n\n"
+
+
+def _event_stream(run_id: int, after: int):
+    """事件流生成器：轮询增量事件；任务进入终态且事件排空后结束。"""
+    last_seq = after
+    while True:
+        events = db.list_events(run_id, after=last_seq, limit=200)
+        for ev in events:
+            last_seq = ev["seq"]
+            yield _sse_event(ev)
+        run = db.get_run(run_id)
+        if run is not None and run["status"] in _TERMINAL_STATUSES and not events:
+            return
+        time.sleep(0.3)
+
+
+@router.get("/{run_id}/events/stream")
+def stream_events(
+    run_id: int,
+    after: int = 0,
+    last_event_id: str | None = Header(default=None),
+) -> StreamingResponse:
+    """SSE 事件流（A5）：支持 after 查询参数与 Last-Event-ID 断线续传（增量协议）。"""
+    if not db.get_run(run_id):
+        raise HTTPException(status_code=404, detail="任务不存在")
+    if last_event_id is not None and last_event_id.isdigit():
+        after = max(after, int(last_event_id))
+    return StreamingResponse(
+        _event_stream(run_id, after),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

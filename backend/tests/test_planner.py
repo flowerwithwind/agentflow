@@ -5,7 +5,6 @@ import json
 import time
 
 import pytest
-
 from app.services import planner
 from app.storage import db
 

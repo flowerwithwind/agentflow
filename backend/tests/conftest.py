@@ -10,11 +10,10 @@ os.environ["AGENTFLOW_API_KEY"] = ""
 os.environ["AGENTFLOW_RATE_LIMIT"] = "1000000"
 
 import pytest
-from fastapi.testclient import TestClient
-
 from app.main import app
 from app.seed import ensure_seed_tools
 from app.storage import db, demo_db
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture(autouse=True)
