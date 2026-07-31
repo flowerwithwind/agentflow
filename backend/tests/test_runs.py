@@ -50,7 +50,7 @@ def test_get_run_detail_with_planned_steps(client):
         assert s["run_id"] == run["id"]
         assert s["seq"] == i
         assert s["status"] == "pending"
-        assert s["name"] and s["role"]
+        assert s["name"] and s["role"] and s["prompt"]
         assert s["kind"] in ("llm", "tool", "approval", "report")
         assert isinstance(s["depends_on"], list)
         assert set(s["depends_on"]) <= keys

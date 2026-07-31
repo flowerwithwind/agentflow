@@ -10,13 +10,14 @@ from app.config import (
     DEFAULT_MAX_TOKENS,
     DEFAULT_MODEL,
     DEFAULT_PARALLEL,
+    DEFAULT_RETRY_BASE_SECONDS,
     DEFAULT_STEP_TIMEOUT_SECONDS,
     DEFAULT_TEMPERATURE,
 )
 from app.storage import db
 
 _MODEL_KEYS = {"model", "base_url", "api_key", "temperature", "max_tokens"}
-_EXEC_KEYS = {"parallel", "step_timeout_seconds", "max_attempts"}
+_EXEC_KEYS = {"parallel", "step_timeout_seconds", "max_attempts", "retry_base_seconds"}
 
 
 def _model_defaults() -> dict[str, Any]:
@@ -34,6 +35,7 @@ def _exec_defaults() -> dict[str, Any]:
         "parallel": DEFAULT_PARALLEL,
         "step_timeout_seconds": DEFAULT_STEP_TIMEOUT_SECONDS,
         "max_attempts": DEFAULT_MAX_ATTEMPTS,
+        "retry_base_seconds": DEFAULT_RETRY_BASE_SECONDS,
     }
 
 

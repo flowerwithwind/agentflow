@@ -192,12 +192,17 @@ def delete_run(run_id: int) -> None:
 
 
 def fail_stale_runs() -> None:
-    """服务启动时把遗留进行中任务标记为失败。"""
+    """服务启动时把遗留进行中任务/步骤标记为失败。"""
     with get_conn() as conn:
         conn.execute(
             "UPDATE runs SET status='failed', error='服务重启，任务中断', updated_at=?, finished_at=? "
             "WHERE status IN ('pending','planning','running','waiting_approval')",
             (now_iso(), now_iso()),
+        )
+        conn.execute(
+            "UPDATE steps SET status='failed', error='服务重启，任务中断', finished_at=? "
+            "WHERE status IN ('running','waiting_approval')",
+            (now_iso(),),
         )
 
 
@@ -217,6 +222,11 @@ def insert_steps(steps: list[dict[str, Any]]) -> None:
 def list_steps(run_id: int) -> list[sqlite3.Row]:
     with get_conn() as conn:
         return list(conn.execute("SELECT * FROM steps WHERE run_id=? ORDER BY seq", (run_id,)))
+
+
+def get_step_by_key(run_id: int, step_key: str) -> sqlite3.Row | None:
+    with get_conn() as conn:
+        return conn.execute("SELECT * FROM steps WHERE run_id=? AND step_key=?", (run_id, step_key)).fetchone()
 
 
 def get_step(step_id: int) -> sqlite3.Row | None:

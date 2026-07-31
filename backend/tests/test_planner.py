@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 
 import pytest
-
 from app.services import planner
 from app.storage import db
 
