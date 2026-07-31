@@ -350,38 +350,78 @@ def _execute_tool_step(step) -> dict[str, Any]:
     return result
 
 
-def _execute_report_step(step) -> dict[str, Any]:
-    """报告步骤：聚合已完成步骤输出生成 Markdown（A6 完善引用与导出）。"""
-    steps = db.list_steps(step["run_id"])
-    sections = []
-    for s in steps:
-        if s["status"] != "succeeded":
+def _citations_for(step, by_key: dict[str, Any]) -> list[tuple[int, str]]:
+    """步骤引用来源：输出中的显式 citations（step key 列表）∪ 依赖步骤，按 seq 去重排序。"""
+    out = db.jloads(step["output_json"], {})
+    keys: list[str] = []
+    for item in out.get("citations") or []:
+        if isinstance(item, str):
+            keys.append(item)
+        elif isinstance(item, dict):
+            key = item.get("key") or item.get("step") or item.get("step_key")
+            if key:
+                keys.append(str(key))
+    keys += list(db.jloads(step["depends_on"], []))
+    seen: set[str] = set()
+    result: list[tuple[int, str]] = []
+    for key in keys:
+        target = by_key.get(key)
+        if target is None or key in seen or key == step["step_key"]:
             continue
+        seen.add(key)
+        result.append((int(target["seq"]), target["name"]))
+    result.sort(key=lambda t: t[0])
+    return result
+
+
+def _render_section(s, status: dict[str, str], by_key: dict[str, Any]) -> str:
+    """单步骤报告小节：标题锚点 #步骤-{seq}，正文 + 引用跳转链接（A6）。"""
+    st = status.get(s["step_key"])
+    head = f"### 步骤 {s['seq']}. {s['name']}（{s['role']}）"
+    if st == "succeeded":
         out = db.jloads(s["output_json"], {})
-        summary = out.get("summary") or out.get("report") or str(out)[:200]
-        sections.append(f"### {s['seq']}. {s['name']}（{s['role']}）\n\n{summary}\n")
-    md = f"# 执行报告\n\n{''.join(sections)}".strip()
-    return {"report": md, "source_steps": [s["step_key"] for s in steps if s["status"] == "succeeded"], "_tokens": (0, 0)}
+        if s["kind"] == "report" and out.get("report"):
+            body = "（报告正文已由引擎按步骤汇总，见上方各小节）"
+        else:
+            body = out.get("summary") or out.get("report") or str(out)[:200]
+        cites = _citations_for(s, by_key)
+        if cites:
+            links = "、".join(f"[步骤 {seq}：{name}](#步骤-{seq})" for seq, name in cites)
+            return f"{head}\n\n{body}\n\n> 引用：{links}\n"
+        return f"{head}\n\n{body}\n"
+    if st == "skipped":
+        return f"{head}\n\n_已跳过（上游未完成或审批未通过）_\n"
+    return ""
 
 
 def _generate_report(run_id: int, steps, status: dict[str, str]) -> str:
-    """终局报告：全部成功/跳过步骤的聚合（含跳过说明）。"""
-    sections = []
-    for s in steps:
-        st = status.get(s["step_key"])
-        if st == "succeeded":
-            out = db.jloads(s["output_json"], {})
-            body = out.get("summary") or out.get("report") or str(out)[:200]
-            sections.append(f"### {s['seq']}. {s['name']}（{s['role']}）\n\n{body}\n")
-        elif st == "skipped":
-            sections.append(f"### {s['seq']}. {s['name']}（{s['role']}）\n\n_已跳过（上游未完成或审批未通过）_\n")
+    """终局报告：步骤索引 + 成功/跳过步骤聚合 + 引用跳转（A6 / FR-07）。"""
+    by_key = {s["step_key"]: s for s in steps}
+    index = "\n".join(f"- [步骤 {s['seq']}：{s['name']}](#步骤-{s['seq']})" for s in steps)
+    sections = "".join(_render_section(s, status, by_key) for s in steps)
     run = db.get_run(run_id)
+    done = sum(1 for s in steps if status.get(s["step_key"]) == "succeeded")
+    skipped = sum(1 for s in steps if status.get(s["step_key"]) == "skipped")
     md = (
         f"# 任务报告：{run['title']}\n\n"
         f"**输入**：{run['input_text']}\n\n"
-        + "".join(sections)
+        f"**执行概览**：共 {len(steps)} 步，成功 {done} 步，跳过 {skipped} 步\n\n"
+        f"## 步骤索引\n\n{index}\n\n"
+        + sections
     )
     return md.strip()
+
+
+def _execute_report_step(step) -> dict[str, Any]:
+    """报告步骤：聚合已完成步骤输出生成 Markdown（A6：步骤索引 + 引用跳转）。"""
+    steps = db.list_steps(step["run_id"])
+    status = {s["step_key"]: s["status"] for s in steps}
+    md = _generate_report(step["run_id"], steps, status)
+    return {
+        "report": md,
+        "source_steps": [s["step_key"] for s in steps if s["status"] == "succeeded"],
+        "_tokens": (0, 0),
+    }
 
 
 def _wait_approval(step) -> dict[str, Any]:

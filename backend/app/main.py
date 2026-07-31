@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api import health, runs, settings, tools
+from app.api import health, reports, runs, settings, tools
 from app.config import ensure_dirs
 from app.seed import ensure_seed_tools
 from app.storage import db, demo_db
@@ -46,4 +46,5 @@ app.add_middleware(
 app.include_router(health.router)
 app.include_router(settings.router)
 app.include_router(tools.router)
+app.include_router(reports.router)
 app.include_router(runs.router)
