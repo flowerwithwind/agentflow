@@ -1,0 +1,57 @@
+# AgentFlow 生产编排（服务器目录 /opt/agentflow，由 GitHub Actions deploy.yml 生成）
+# 对外端口：后端 18102，浏览器 18182
+services:
+  backend:
+    image: ${DOCKER_USERNAME}/agentflow-backend:${IMAGE_TAG:-latest}
+    container_name: agentflow-backend
+    restart: unless-stopped
+    environment:
+      AGENTFLOW_DATA_DIR: /data
+      AGENTFLOW_API_KEY: ${AGENTFLOW_API_KEY:-}
+      AGENTFLOW_BASE_URL: ${AGENTFLOW_BASE_URL:-}
+      AGENTFLOW_MODEL: ${AGENTFLOW_MODEL:-deepseek-chat}
+      AGENTFLOW_RATE_LIMIT: ${AGENTFLOW_RATE_LIMIT:-60}
+      TZ: Asia/Shanghai
+    volumes:
+      - agentflow-data:/data
+    ports:
+      - "${BACKEND_PORT:-18102}:8020"
+    mem_limit: 512m
+    cpus: "1.0"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8020/api/health', timeout=4)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  frontend:
+    image: ${DOCKER_USERNAME}/agentflow-frontend:${IMAGE_TAG:-latest}
+    container_name: agentflow-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${HTTP_PORT:-18182}:80"
+    mem_limit: 128m
+    cpus: "0.5"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/healthz"]
+      interval: 30s
+      timeout: 8s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  agentflow-data:

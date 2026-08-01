@@ -80,3 +80,15 @@ cd backend && pytest && ruff check .
 cd frontend && npm test && npm run build
 ```
 
+## 服务器自动部署（端口 18102 / 18182）
+
+`git push origin main` 触发 GitHub Actions `Deploy AgentFlow`：测试 → 构建推送 Docker Hub 镜像（`flowerwithwind/agentflow-backend` / `agentflow-frontend`）→ SSH 部署到 `/opt/agentflow`（后端 18102，浏览器 18182）。
+
+仓库 Secrets 需配置：`DOCKER_USERNAME` `DOCKER_PASSWORD` `SERVER_HOST` `SERVER_USER` `SERVER_PASSWORD`（可选：`SERVER_PORT` `BACKEND_PORT` `HTTP_PORT` `AGENTFLOW_API_KEY` `AGENTFLOW_BASE_URL` `AGENTFLOW_MODEL` `AGENTFLOW_RATE_LIMIT`）。
+
+服务器一次性准备：
+
+```bash
+sudo mkdir -p /opt/agentflow && sudo chown -R ubuntu:ubuntu /opt/agentflow
+sudo ufw allow 18102/tcp && sudo ufw allow 18182/tcp
+```
